@@ -15,6 +15,8 @@ func add(p unsafe.Pointer, x uintptr) unsafe.Pointer {
 // getg returns the pointer to the current g.
 // The compiler rewrites calls to this function into instructions
 // that fetch the g directly (from TLS or from the dedicated register).
+// 编译时编辑器会把此函数变为具体的指令，
+// 例如: cmd/compile/internal/amd64/ssa.go 中的 ssa.OpAMD64LoweredGetG
 func getg() *g
 
 // mcall switches from the g to the g0 stack and invokes fn(g),
