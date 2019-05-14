@@ -412,12 +412,12 @@ type m struct {
 	goSigStack    gsignalStack // Go-allocated signal handling stack
 	sigmask       sigset       // storage for saved signal mask
 	tls           [6]uintptr   // thread-local storage (for x86 extern register)
-	mstartfn      func()
-	curg          *g       // current running goroutine
-	caughtsig     guintptr // goroutine running during fatal signal
-	p             puintptr // attached p for executing go code (nil if not executing go code)
-	nextp         puintptr
-	oldp          puintptr // the p that was attached before executing a syscall
+	mstartfn      func()       // go 关键字后面所带的函数指针
+	curg          *g           // current running goroutine
+	caughtsig     guintptr     // goroutine running during fatal signal
+	p             puintptr     // attached p for executing go code (nil if not executing go code)
+	nextp         puintptr     // 预关联的 p
+	oldp          puintptr     // the p that was attached before executing a syscall
 	id            int64
 	mallocing     int32
 	throwing      int32
@@ -443,7 +443,7 @@ type m struct {
 	alllink       *m // on allm
 	schedlink     muintptr
 	mcache        *mcache
-	lockedg       guintptr
+	lockedg       guintptr       // 与当前m锁定的g, 通常是为cgo准备的，也可以通过LockOSThread主动锁定
 	createstack   [32]uintptr    // stack that created this thread.
 	lockedExt     uint32         // tracking for external LockOSThread
 	lockedInt     uint32         // tracking for internal lockOSThread
