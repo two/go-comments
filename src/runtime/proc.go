@@ -593,10 +593,12 @@ func checkmcount() {
 	}
 }
 
+// m 初始化
 func mcommoninit(mp *m) {
-	_g_ := getg()
+	_g_ := getg() // 获取当前运行的goroutine
 
 	// g0 stack won't make sense for user (and is not necessary unwindable).
+	// g0 是用来执行调度命令的goroutine
 	if _g_ != _g_.m.g0 {
 		callers(1, mp.createstack[:])
 	}
@@ -609,12 +611,13 @@ func mcommoninit(mp *m) {
 	sched.mnext++
 	checkmcount()
 
+	// 快速获取随机数
 	mp.fastrand[0] = 1597334677 * uint32(mp.id)
 	mp.fastrand[1] = uint32(cputicks())
 	if mp.fastrand[0]|mp.fastrand[1] == 0 {
 		mp.fastrand[1] = 1
 	}
-
+	// 初始化信号gsignal
 	mpreinit(mp)
 	if mp.gsignal != nil {
 		mp.gsignal.stackguard1 = mp.gsignal.stack.lo + _StackGuard
@@ -622,10 +625,13 @@ func mcommoninit(mp *m) {
 
 	// Add to allm so garbage collector doesn't free g->m
 	// when it is just in a register or thread-local storage.
+	// 把 m 放到全局的 m 列表 runtime.allm 中
+	// 从而当它刚保存到寄存器或本地线程存储时候 GC 不会释放 g->m
 	mp.alllink = allm
 
 	// NumCgoCall() iterates over allm w/o schedlock,
 	// so we need to publish it safely.
+	// 会在没有使用 schedlock 时遍历 allm，等价于 allm = mp
 	atomicstorep(unsafe.Pointer(&allm), unsafe.Pointer(mp))
 	unlock(&sched.lock)
 
@@ -1201,11 +1207,11 @@ func mstart1() {
 	if _g_.m == &m0 {
 		mstartm0()
 	}
-
+	// 执行启动函数
 	if fn := _g_.m.mstartfn; fn != nil {
 		fn()
 	}
-
+	// 与预联的 p 完成关联
 	if _g_.m != &m0 {
 		acquirep(_g_.m.nextp.ptr())
 		_g_.m.nextp = 0
@@ -1490,7 +1496,7 @@ func allocm(_p_ *p, fn func()) *m {
 	}
 
 	mp := new(m)
-	mp.mstartfn = fn
+	mp.mstartfn = fn // 给起始函数赋值
 	mcommoninit(mp)
 
 	// In case of cgo or Solaris or Darwin, pthread_create will make us a stack.
