@@ -345,7 +345,7 @@ type g struct {
 	// It is stack.lo+StackGuard on g0 and gsignal stacks.
 	// It is ~0 on other goroutine stacks, to trigger a call to morestackc (and crash).
 	stack       stack   // offset known to runtime/cgo
-	stackguard0 uintptr // offset known to liblink
+	stackguard0 uintptr // offset known to liblink 用于判断堆栈溢出，判断溢出调用runtime.morestack_noctxt()
 	stackguard1 uintptr // offset known to liblink
 
 	_panic         *_panic // innermost panic - offset known to liblink
@@ -358,13 +358,13 @@ type g struct {
 	param          unsafe.Pointer // passed parameter on wakeup
 	atomicstatus   uint32
 	stackLock      uint32 // sigprof/scang lock; TODO: fold in to atomicstatus
-	goid           int64
+	goid           int64  // goroutine id, 如何获取goroutine id : https://liudanking.com/performance/golang-%E8%8E%B7%E5%8F%96-goroutine-id-%E5%AE%8C%E5%85%A8%E6%8C%87%E5%8D%97/
 	schedlink      guintptr
-	waitsince      int64      // approx time when the g become blocked
-	waitreason     waitReason // if status==Gwaiting
-	preempt        bool       // preemption signal, duplicates stackguard0 = stackpreempt
-	paniconfault   bool       // panic (instead of crash) on unexpected fault address
-	preemptscan    bool       // preempted g does scan for gc
+	waitsince      int64      // approx time when the g become blocked 此 g 阻塞的时间
+	waitreason     waitReason // if status==Gwaiting, 记录等待原因
+	preempt        bool       // preemption signal, duplicates stackguard0 = stackpreempt 抢占信号
+	paniconfault   bool       // panic (instead of crash) on unexpected fault address 发生panic的地址
+	preemptscan    bool       // preempted g does scan for gc 为 gc 进行 scan 的被强占的 g
 	gcscandone     bool       // g has scanned stack; protected by _Gscan bit in status
 	gcscanvalid    bool       // false at start of gc cycle, true if G has not run since last scan; TODO: remove?
 	throwsplit     bool       // must not split stack
@@ -379,15 +379,15 @@ type g struct {
 	sigcode0       uintptr
 	sigcode1       uintptr
 	sigpc          uintptr
-	gopc           uintptr         // pc of go statement that created this goroutine
+	gopc           uintptr         // pc of go statement that created this goroutine 当前创建 goroutine go 语句的 pc 寄存器
 	ancestors      *[]ancestorInfo // ancestor information goroutine(s) that created this goroutine (only used if debug.tracebackancestors)
-	startpc        uintptr         // pc of goroutine function
+	startpc        uintptr         // pc of goroutine function ; goroutine 函数的 pc 寄存器
 	racectx        uintptr
-	waiting        *sudog         // sudog structures this g is waiting on (that have a valid elem ptr); in lock order
+	waiting        *sudog         // sudog structures this g is waiting on (that have a valid elem ptr); in lock order, 如果 g 发生阻塞（且有有效的元素指针）sudog 会将当前 g 按锁住的顺序组织起来
 	cgoCtxt        []uintptr      // cgo traceback context
 	labels         unsafe.Pointer // profiler labels
 	timer          *timer         // cached timer for time.Sleep
-	selectDone     uint32         // are we participating in a select and did someone win the race?
+	selectDone     uint32         // are we participating in a select and did someone win the race?, 我们是否正在参与 select 且某个 goroutine 胜出？
 
 	// Per-G GC state
 
@@ -474,14 +474,14 @@ type m struct {
 type p struct {
 	lock mutex
 
-	id          int32
+	id          int32  // 在 allp 中的下标
 	status      uint32 // one of pidle/prunning/...
 	link        puintptr
-	schedtick   uint32     // incremented on every scheduler call
-	syscalltick uint32     // incremented on every system call
-	sysmontick  sysmontick // last tick observed by sysmon
-	m           muintptr   // back-link to associated m (nil if idle)
-	mcache      *mcache
+	schedtick   uint32     // incremented on every scheduler call 每次调度器调用都会增加
+	syscalltick uint32     // incremented on every system call 每次进行系统调用都会增加
+	sysmontick  sysmontick // last tick observed by sysmon 系统监控观察到的最后一次记录
+	m           muintptr   // back-link to associated m (nil if idle) 反向链接到关联的 m （nil 则表示 idle）
+	mcache      *mcache    //todo 说明
 	racectx     uintptr
 
 	deferpool    [5][]*_defer // pool of available defer structs of different sizes (see panic.go)
@@ -491,6 +491,7 @@ type p struct {
 	goidcache    uint64
 	goidcacheend uint64
 
+	// 正在执行任务的的 g 队列
 	// Queue of runnable goroutines. Accessed without lock.
 	runqhead uint32
 	runqtail uint32
@@ -506,6 +507,7 @@ type p struct {
 	// goroutines to the end of the run queue.
 	runnext guintptr
 
+	// 自由 g 队列，空闲的g
 	// Available G's (status == Gdead)
 	gFree struct {
 		gList
@@ -525,11 +527,11 @@ type p struct {
 	// swept and reclaimed by sweeping in the current sweep loop.
 	traceSwept, traceReclaimed uintptr
 
-	palloc persistentAlloc // per-P to avoid mutex
+	palloc persistentAlloc // per-P to avoid mutex 本地 p
 
 	// Per-P GC state
-	gcAssistTime         int64 // Nanoseconds in assistAlloc
-	gcFractionalMarkTime int64 // Nanoseconds in fractional mark worker
+	gcAssistTime         int64 // Nanoseconds in assistAlloc 时间 ns
+	gcFractionalMarkTime int64 // Nanoseconds in fractional mark worker 时间 ns
 	gcBgMarkWorker       guintptr
 	gcMarkWorkerMode     gcMarkWorkerMode
 
@@ -549,6 +551,7 @@ type p struct {
 
 	runSafePointFn uint32 // if 1, run sched.safePointFn at next safe point
 
+	//P 既然是处理器的抽象，因此在 P 的数组中是绝对不允许发生假共享（false sharing）的， 这也就是 P 最后有一个缓存行填充的原因。
 	pad cpu.CacheLinePad
 }
 

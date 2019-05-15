@@ -531,6 +531,7 @@ func schedinit() {
 		_g_.racectx, raceprocctx0 = raceinit()
 	}
 
+	// m 最大个数
 	sched.maxmcount = 10000
 
 	tracebackinit()
@@ -552,10 +553,12 @@ func schedinit() {
 	parsedebugvars()
 	gcinit()
 
+	// 设置 p 个数
+	// 这里1.8版有一个_MaxGomaxporcs变量来控制总的 p 个数不超过 256，目前已经去掉了这个限制
 	sched.lastpoll = uint64(nanotime())
-	procs := ncpu
+	procs := ncpu // 默认值为 cpu 总核心数
 	if n, ok := atoi32(gogetenv("GOMAXPROCS")); ok && n > 0 {
-		procs = n
+		procs = n // 使用GOMAXPROCS变量覆盖个数
 	}
 	if procresize(procs) != nil {
 		throw("unknown runnable goroutine during bootstrap")
@@ -1097,7 +1100,7 @@ func startTheWorldWithSema(emitTraceEvent bool) int64 {
 
 	procs := gomaxprocs
 	if newprocs != 0 {
-		procs = newprocs
+		procs = newprocs // 重新赋值 p 个数
 		newprocs = 0
 	}
 	p1 := procresize(procs)
@@ -3225,6 +3228,7 @@ func syscall_runtime_AfterExec() {
 func malg(stacksize int32) *g {
 	newg := new(g)
 	if stacksize >= 0 {
+		// 根据系统不同，分配的大小不同, 最终分配的大小是大于 (_StackSystem + stacksize) 的最小的2的n次方
 		stacksize = round2(_StackSystem + stacksize)
 		systemstack(func() {
 			newg.stack = stackalloc(uint32(stacksize))
@@ -3235,6 +3239,14 @@ func malg(stacksize int32) *g {
 	return newg
 }
 
+// 创建 g 过程:
+// 1. 首先尝试从 P 本地 gfree 链表或全局 gfree 队列获取已经执行过的、已经执行过的 g
+// 2. 初始化过程中程序无论是本地队列还是全局队列都不可能获取到 g，因此创建一个新的 g，并为其分配运行线程（执行栈），这时 g 处于 _Gidle 状态
+// 3. 创建完成后，g 被更改为 _Gdead 状态，并根据要执行函数的入口地址和参数，初始化执行栈的 SP 和参数的入栈位置，并将需要的参数拷贝一份存入执行栈中
+// 4. 根据 SP、参数，在 g.sched 中保存 SP 和 PC 指针来初始化 g 的运行现场
+// 5. 将调用方、要执行的函数的入口 PC 进行保存，并将 g 的状态更改为 _Grunnable
+// 6. 给 goroutine 分配 id，并将其放入 P 本地队列的队头或全局队列（初始化阶段队列肯定不是满的，因此不可能放入全局队列）
+// 7. 检查空闲的 P，将其唤醒，准备执行 G，但我们目前处于初始化阶段，主 goroutine 尚未开始执行，因此这里不会唤醒 P。
 // Create a new g running fn with siz bytes of arguments.
 // Put it on the queue of g's waiting to run.
 // The compiler turns a go statement into a call to this.
@@ -3245,7 +3257,7 @@ func malg(stacksize int32) *g {
 func newproc(siz int32, fn *funcval) {
 	argp := add(unsafe.Pointer(&fn), sys.PtrSize)
 	gp := getg()
-	pc := getcallerpc()
+	pc := getcallerpc() // 获取调用者的pc, 即将要执行的下一条指令的地址
 	systemstack(func() {
 		newproc1(fn, (*uint8)(argp), siz, gp, pc)
 	})
@@ -3269,16 +3281,17 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 	// Not worth it: this is almost always an error.
 	// 4*sizeof(uintreg): extra space added below
 	// sizeof(uintreg): caller's LR (arm) or return address (x86, in gostartcall).
+	// 为啥不知直接 _StackMin - 5*sys.RegSize ?
 	if siz >= _StackMin-4*sys.RegSize-sys.RegSize {
 		throw("newproc: function arguments too large for new goroutine")
 	}
 
 	_p_ := _g_.m.p.ptr()
-	newg := gfget(_p_)
-	if newg == nil {
-		newg = malg(_StackMin)
-		casgstatus(newg, _Gidle, _Gdead)
-		allgadd(newg) // publishes with a g->status of Gdead so GC scanner doesn't look at uninitialized stack.
+	newg := gfget(_p_) // 从自由 g 列表中获取一个 g
+	if newg == nil {   //没有获取到自由g, 重新建立一个g
+		newg = malg(_StackMin)           // 创建一个拥有_StackMin(目前是2KB)大小的栈的g, 注意真正分配的栈的大小还要加上系统本身占用的空间
+		casgstatus(newg, _Gidle, _Gdead) // 将新创建的 g 从 _Gidle 更新为 _Gdead 状态
+		allgadd(newg)                    // publishes with a g->status of Gdead so GC scanner doesn't look at uninitialized stack. 将 Gdead 状态的 g 添加到 allg，这样 GC 不会扫描未初始化的栈
 	}
 	if newg.stack.hi == 0 {
 		throw("newproc1: newg missing stack")
@@ -3288,8 +3301,10 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 		throw("newproc1: new g is not Gdead")
 	}
 
+	// 计算运行空间大小，对齐
 	totalSize := 4*sys.RegSize + uintptr(siz) + sys.MinFrameSize // extra space in case of reads slightly beyond frame
 	totalSize += -totalSize & (sys.SpAlign - 1)                  // align to spAlign
+	// 确定 sp 和参数入栈位置
 	sp := newg.stack.hi - totalSize
 	spArg := sp
 	if usesLR {
@@ -3298,8 +3313,14 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 		prepGoExitFrame(sp)
 		spArg += sys.MinFrameSize
 	}
+	// 处理参数，当有参数时，将参数拷贝到 goroutine 的执行栈中
 	if narg > 0 {
+		// 从 argp 参数开始的位置，复制 narg 个字节到 spArg（参数拷贝）
 		memmove(unsafe.Pointer(spArg), unsafe.Pointer(argp), uintptr(narg))
+		// 栈到栈的拷贝。
+		// 如果启用了 write barrier 并且 源栈为灰色（目标始终为黑色），
+		// 则执行 barrier 拷贝。
+		// 因为目标栈上可能有垃圾，我们在 memmove 之后执行此操作。
 		// This is a stack-to-stack copy. If write barriers
 		// are enabled and the source stack is grey (the
 		// destination is always black), then perform a
@@ -3317,25 +3338,31 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 		}
 	}
 
+	// 清理、创建并初始化的 g 的运行现场
 	memclrNoHeapPointers(unsafe.Pointer(&newg.sched), unsafe.Sizeof(newg.sched))
 	newg.sched.sp = sp
 	newg.stktopsp = sp
 	newg.sched.pc = funcPC(goexit) + sys.PCQuantum // +PCQuantum so that previous instruction is in same function
 	newg.sched.g = guintptr(unsafe.Pointer(newg))
 	gostartcallfn(&newg.sched, fn)
+	// 初始化 g 的基本状态
 	newg.gopc = callerpc
 	newg.ancestors = saveAncestors(callergp)
-	newg.startpc = fn.fn
+	newg.startpc = fn.fn // 入口 pc
 	if _g_.m.curg != nil {
-		newg.labels = _g_.m.curg.labels
+		newg.labels = _g_.m.curg.labels // 增加 profiler 标签
 	}
 	if isSystemGoroutine(newg, false) {
 		atomic.Xadd(&sched.ngsys, +1)
 	}
 	newg.gcscanvalid = false
+	// 现在将 g 更换为 _Grunnable 状态
 	casgstatus(newg, _Gdead, _Grunnable)
 
 	if _p_.goidcache == _p_.goidcacheend {
+		// Sched.goidgen 为最后一个分配的 id，相当于一个全局计数器
+		// 这一批必须为 [sched.goidgen+1, sched.goidgen+GoidCacheBatch].
+		// 启动时 sched.goidgen=0, 因此主 goroutine 的 goid 为 1
 		// Sched.goidgen is the last allocated id,
 		// this batch must be [sched.goidgen+1, sched.goidgen+GoidCacheBatch].
 		// At startup sched.goidgen=0, so main goroutine receives goid=1.
@@ -3351,8 +3378,12 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 	if trace.enabled {
 		traceGoCreate(newg, newg.startpc)
 	}
+	// 将这里新创建的 g 放入 p 的本地队列或直接放入全局队列
+	// true 表示放入执行队列的下一个，false 表示放入队尾
 	runqput(_p_, newg, true)
 
+	// 如果有空闲的 P、且 spinning 的 M 数量为 0，且主 goroutine 已经开始运行，则进行唤醒 p
+	// 初始化阶段 mainStarted 为 false，所以 p 不会被唤醒
 	if atomic.Load(&sched.npidle) != 0 && atomic.Load(&sched.nmspinning) == 0 && mainStarted {
 		wakep()
 	}
@@ -3431,6 +3462,8 @@ func gfput(_p_ *p, gp *g) {
 	}
 }
 
+// 从 自由 g 列表中获取一个 g
+// 当本地的 gFree为空时，从调度器的 gFree获取一个，放到本地的gFree中，然后返回本地gFree中的g
 // Get from gfree list.
 // If local list is empty, grab a batch from global list.
 func gfget(_p_ *p) *g {
@@ -3901,6 +3934,7 @@ func setcpuprofilerate(hz int32) {
 	_g_.m.locks--
 }
 
+// p 初始化函数
 // Change number of processors. The world is stopped, sched is locked.
 // gcworkbufs are not being modified by either the GC or
 // the write barrier code.
@@ -3944,13 +3978,13 @@ func procresize(nprocs int32) *p {
 		if pp == nil {
 			pp = new(p)
 			pp.id = i
-			pp.status = _Pgcstop
+			pp.status = _Pgcstop //p 初始状态
 			pp.sudogcache = pp.sudogbuf[:0]
 			for i := range pp.deferpool {
 				pp.deferpool[i] = pp.deferpoolbuf[i][:0]
 			}
 			pp.wbBuf.reset()
-			atomicstorep(unsafe.Pointer(&allp[i]), unsafe.Pointer(pp))
+			atomicstorep(unsafe.Pointer(&allp[i]), unsafe.Pointer(pp)) // 相当于 allp[i] = pp
 		}
 		if pp.mcache == nil {
 			if old == 0 && i == 0 {
@@ -3982,6 +4016,7 @@ func procresize(nprocs int32) *p {
 			traceProcStop(p)
 		}
 		// move all runnable goroutines to the global queue
+		// 把可运行的 g 转移到 全局的 runq 队列中
 		for p.runqhead != p.runqtail {
 			// pop from tail of local queue
 			p.runqtail--
@@ -4029,7 +4064,7 @@ func procresize(nprocs int32) *p {
 			p.racectx = 0
 		}
 		p.gcAssistTime = 0
-		p.status = _Pdead
+		p.status = _Pdead // 释放的 p 状态为  _PDead
 		// can't free P itself because it can be referenced by an M in syscall
 	}
 
@@ -4043,7 +4078,7 @@ func procresize(nprocs int32) *p {
 	_g_ := getg()
 	if _g_.m.p != 0 && _g_.m.p.ptr().id < nprocs {
 		// continue to use the current P
-		_g_.m.p.ptr().status = _Prunning
+		_g_.m.p.ptr().status = _Prunning // 当前 g 所绑定的 p 设置状态为 _Prunning
 		_g_.m.p.ptr().mcache.prepareForSweep()
 	} else {
 		// release the current P and acquire allp[0]
@@ -4054,8 +4089,8 @@ func procresize(nprocs int32) *p {
 		_g_.m.mcache = nil
 		p := allp[0]
 		p.m = 0
-		p.status = _Pidle
-		acquirep(p)
+		p.status = _Pidle // 当前 p 未与任何 m 关联
+		acquirep(p)       // 直接将 p 绑定到当前的 M
 		if trace.enabled {
 			traceGoStart()
 		}
@@ -4102,6 +4137,7 @@ func acquirep(_p_ *p) {
 	}
 }
 
+// 绑定p 和 m 的第一步
 // wirep is the first step of acquirep, which actually associates the
 // current M to _p_. This is broken out so we can disallow write
 // barriers for this part, since we don't yet have a P.
@@ -4749,6 +4785,11 @@ func runqempty(_p_ *p) bool {
 // assumptions.
 const randomizeScheduler = raceenabled
 
+// runqput 尝试将 g 放入本地可运行队列中
+// 如果 next 为 false，则 runqput 会将 g 放到可运行队列的尾部
+// 如果 next 为 true，则 runqput 会将 g 放入 _p_.runnext 槽内
+// 如果运行队列已满，则runnext 会放到全局队列中去
+// 仅在所有 P 下执行。
 // runqput tries to put g on the local runnable queue.
 // If next is false, runqput adds g to the tail of the runnable queue.
 // If next is true, runqput puts g in the _p_.runnext slot.
@@ -4775,11 +4816,13 @@ func runqput(_p_ *p, gp *g, next bool) {
 retry:
 	h := atomic.LoadAcq(&_p_.runqhead) // load-acquire, synchronize with consumers
 	t := _p_.runqtail
+	// 如果 P 的本地队列没有满，入队
 	if t-h < uint32(len(_p_.runq)) {
 		_p_.runq[t%uint32(len(_p_.runq))].set(gp)
 		atomic.StoreRel(&_p_.runqtail, t+1) // store-release, makes the item available for consumption
 		return
 	}
+	// 可运行队列已经满了，只能扔给全局队列了
 	if runqputslow(_p_, gp, h, t) {
 		return
 	}
@@ -4787,12 +4830,14 @@ retry:
 	goto retry
 }
 
+// 当要将一个 g 放入全局队列时，不仅仅只影响它自己， 还会将本地队列中一半的 work 给拿走，然后将他们的执行顺序重新打乱。 再放入全局队列。
 // Put g and a batch of work from local runnable queue on global queue.
 // Executed only by the owner P.
 func runqputslow(_p_ *p, gp *g, h, t uint32) bool {
 	var batch [len(_p_.runq)/2 + 1]*g
 
 	// First, grab a batch from local queue.
+	// 首先，从本地队列中抓取一半 work
 	n := t - h
 	n = n / 2
 	if n != uint32(len(_p_.runq)/2) {
@@ -4806,6 +4851,7 @@ func runqputslow(_p_ *p, gp *g, h, t uint32) bool {
 	}
 	batch[n] = gp
 
+	// 打乱顺序
 	if randomizeScheduler {
 		for i := uint32(1); i <= n; i++ {
 			j := fastrandn(i + 1)

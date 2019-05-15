@@ -307,8 +307,10 @@ func stackcache_clear(c *mcache) {
 	unlock(&stackpoolmu)
 }
 
+// 分配 n 字节的栈
 // stackalloc allocates an n byte stack.
 //
+// 栈的分配在系统栈上进行
 // stackalloc must run on the system stack because it uses per-P
 // resources and must not split the stack.
 //
@@ -1060,6 +1062,8 @@ func nilfunc() {
 	*(*uint8)(nil) = 0
 }
 
+// 调整 Gobuf，就好像它执行了对 fn 的调用，然后立即进行了 gosave
+// 整个过程就只是将要执行的函数 fv 或者称 fn 保存到了 newg.sched 这个 buf 中。
 // adjust Gobuf as if it executed a call to fn
 // and then did an immediate gosave.
 func gostartcallfn(gobuf *gobuf, fv *funcval) {
@@ -1069,6 +1073,7 @@ func gostartcallfn(gobuf *gobuf, fv *funcval) {
 	} else {
 		fn = unsafe.Pointer(funcPC(nilfunc))
 	}
+	// 调整 Gobuf，就好像它用上下文 ctxt 对 fn 执行了一个调用，然后立即进行了 gosave
 	gostartcall(gobuf, fn, unsafe.Pointer(fv))
 }
 
