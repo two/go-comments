@@ -13,6 +13,7 @@ import (
 
 var buildVersion = sys.TheVersion
 
+// golang 调度器设计的说明
 // Goroutine scheduler
 // The scheduler's job is to distribute ready-to-run goroutines over worker threads.
 //
@@ -77,8 +78,8 @@ var buildVersion = sys.TheVersion
 // for nmspinning manipulation.
 
 var (
-	m0           m
-	g0           g
+	m0           m // 进程启动后的初始线程
+	g0           g // 初始线程的stack
 	raceprocctx0 uintptr
 )
 
@@ -110,6 +111,7 @@ var initSigmask sigset
 func main() {
 	g := getg()
 
+	// m0 go 只能用在主协程里
 	// Racectx of m0->g0 is used only as the parent of the main goroutine.
 	// It must not be used for anything else.
 	g.m.g0.racectx = 0
@@ -1149,6 +1151,12 @@ func startTheWorldWithSema(emitTraceEvent bool) int64 {
 	return startTime
 }
 
+// 程序开始执行的入口
+// 几个需要注意的细节：
+// 1. mstart 除了在程序引导阶段会被运行之外，也可能在每个 m 被创建时运行（本节稍后讨论）；
+// 2. mstart 进入 mstart1 之后，会初始化自身用于信号处理的 g，在 mstartfn 指定时将其执行；
+// 3. 调度循环 schedule 无法返回，因此最后一个 mexit 目前还不会被执行，因此当下所有的 Go 程序会创建的线程都无法被释放 （只有一个特例，当使用 runtime.LockOSThread 锁住的 G 退出时会使用 gogo 退出 M）。
+
 // Called to start an M.
 //
 // This must not split the stack because we may not even have stack
@@ -1162,8 +1170,12 @@ func startTheWorldWithSema(emitTraceEvent bool) int64 {
 func mstart() {
 	_g_ := getg()
 
+	// 确定执行栈的边界, 通过检查 g 执行占的边界来确定是否为系统栈
 	osStack := _g_.stack.lo == 0
 	if osStack {
+		// 根据系统栈初始化执行栈的边界
+		// cgo 可能会离开 stack.hi
+		// minit 可能会更新栈的边界
 		// Initialize stack bounds from system stack.
 		// Cgo may have left stack size in stack.hi.
 		// minit may update the stack bounds.
@@ -1174,12 +1186,15 @@ func mstart() {
 		_g_.stack.hi = uintptr(noescape(unsafe.Pointer(&size)))
 		_g_.stack.lo = _g_.stack.hi - size + 1024
 	}
+	// 初始化栈 guard，进而可以同时调用 Go 或 C 函数。
 	// Initialize stack guards so that we can start calling
 	// both Go and C functions with stack growth prologues.
 	_g_.stackguard0 = _g_.stack.lo + _StackGuard
 	_g_.stackguard1 = _g_.stackguard0
+	// 正式启动
 	mstart1()
 
+	// 退出线程
 	// Exit this thread.
 	if GOOS == "windows" || GOOS == "solaris" || GOOS == "plan9" || GOOS == "darwin" || GOOS == "aix" {
 		// Window, Solaris, Darwin, AIX and Plan 9 always system-allocate
@@ -1187,6 +1202,7 @@ func mstart() {
 		// so the logic above hasn't set osStack yet.
 		osStack = true
 	}
+	// 退出线程
 	mexit(osStack)
 }
 
@@ -1197,6 +1213,8 @@ func mstart1() {
 		throw("bad runtime·mstart")
 	}
 
+	// 为了在 mcall 的栈顶使用调用方来结束当前线程，做记录
+	// 当进入 schedule 之后，我们再也不会回到 mstart1，所以其他调用可以复用当前帧。
 	// Record the caller for use as the top of stack in mcall and
 	// for terminating the thread.
 	// We're never coming back to mstart1 after we call schedule,
@@ -1205,6 +1223,7 @@ func mstart1() {
 	asminit()
 	minit()
 
+	// 设置信号 handler；在 minit 之后，因为 minit 可以准备处理信号的的线程
 	// Install signal handlers; after minit so that minit can
 	// prepare the thread to be able to handle the signals.
 	if _g_.m == &m0 {
@@ -1219,6 +1238,7 @@ func mstart1() {
 		acquirep(_g_.m.nextp.ptr())
 		_g_.m.nextp = 0
 	}
+	// 开始调度
 	schedule()
 }
 
@@ -1924,6 +1944,9 @@ func templateThread() {
 	}
 }
 
+// 停止当前 m 的执行，直到新的 work 有效
+// 在包含要求的 P 下返回
+// 将 m 放回至空闲列表中，而后使用 note 注册一个暂止通知， 阻塞到它重新被复始。
 // Stops execution of the current m until new work is available.
 // Returns with acquired P.
 func stopm() {
@@ -1939,11 +1962,16 @@ func stopm() {
 		throw("stopm spinning")
 	}
 
+	// 将 m 放回到 空闲列表中，因为我们马上就要暂止了
 	lock(&sched.lock)
 	mput(_g_.m)
 	unlock(&sched.lock)
+	// 暂止当前的 M，在此阻塞，直到被唤醒
 	notesleep(&_g_.m.park)
+	// 清除暂止的 note
 	noteclear(&_g_.m.park)
+	// 此时已经被复始，说明有任务要执行
+	// 立即 acquire P
 	acquirep(_g_.m.nextp.ptr())
 	_g_.m.nextp = 0
 }
@@ -2473,6 +2501,7 @@ func injectglist(glist *gList) {
 	*glist = gList{}
 }
 
+// 一轮调度: 找到可运行的goroutine 并且执行
 // One round of scheduler: find a runnable goroutine and execute it.
 // Never returns.
 func schedule() {
@@ -4116,6 +4145,7 @@ func procresize(nprocs int32) *p {
 	return runnablePs
 }
 
+// m 与 p 的绑定, 将 p 链表中的 p ，保存到 m 中的 p 指针上
 // Associate p and the current m.
 //
 // This function is allowed to have write barriers even if the caller
@@ -4128,6 +4158,7 @@ func acquirep(_p_ *p) {
 
 	// Have p; write barriers now allowed.
 
+	// 在 P 可以从一个潜在设置的 mcache 分配前执行偏好的 mcache flush
 	// Perform deferred mcache flush before this P can allocate
 	// from a potentially stale mcache.
 	_p_.mcache.prepareForSweep()
@@ -4147,9 +4178,12 @@ func acquirep(_p_ *p) {
 func wirep(_p_ *p) {
 	_g_ := getg()
 
+	// 检查 确实没有 p
 	if _g_.m.p != 0 || _g_.m.mcache != nil {
 		throw("wirep: already in go")
 	}
+
+	// 检查 m 是否正常，并检查要获取的 p 的状态
 	if _p_.m != 0 || _p_.status != _Pidle {
 		id := int64(0)
 		if _p_.m != 0 {
@@ -4159,8 +4193,11 @@ func wirep(_p_ *p) {
 		throw("wirep: invalid p state")
 	}
 	_g_.m.mcache = _p_.mcache
+	// 正式获取 p
 	_g_.m.p.set(_p_)
+	// 将 p 绑定到 m
 	_p_.m.set(_g_.m)
+	// 修改 p 的状态
 	_p_.status = _Prunning
 }
 
