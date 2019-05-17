@@ -210,6 +210,7 @@ func (gp *guintptr) cas(old, new guintptr) bool {
 	return atomic.Casuintptr((*uintptr)(unsafe.Pointer(gp)), uintptr(old), uintptr(new))
 }
 
+// setGNoWB 当使用 guintptr 不可行时，在没有 write barrier 下执行 *gp = new
 // setGNoWB performs *gp = new without a write barrier.
 // For times when it's impractical to use a guintptr.
 //go:nosplit
@@ -243,6 +244,7 @@ func (mp muintptr) ptr() *m { return (*m)(unsafe.Pointer(mp)) }
 //go:nosplit
 func (mp *muintptr) set(m *m) { *mp = muintptr(unsafe.Pointer(m)) }
 
+// setMNoWB 当使用 muintptr 不可行时，在没有 write barrier 下执行 *mp = new
 // setMNoWB performs *mp = new without a write barrier.
 // For times when it's impractical to use an muintptr.
 //go:nosplit
@@ -252,6 +254,7 @@ func setMNoWB(mp **m, new *m) {
 }
 
 type gobuf struct {
+	// 配合连接器使用 gobuf_pc表示 pc 的偏移量， gobuf_sp 表示 sp 的偏移量等
 	// The offsets of sp, pc, and g are known to (hard-coded in) libmach.
 	//
 	// ctxt is unusual with respect to GC: it may be a

@@ -22,6 +22,6 @@ func gostartcall(buf *gobuf, fn, ctxt unsafe.Pointer) {
 	sp -= sys.PtrSize
 	*(*uintptr)(unsafe.Pointer(sp)) = buf.pc
 	buf.sp = sp
-	buf.pc = uintptr(fn)
+	buf.pc = uintptr(fn) // 把fn的地址放到PC寄存器中， 配合runtime/asm_amd64.s的gogo实现来看，执行gogo的时候其实就是执行fn
 	buf.ctxt = ctxt
 }
