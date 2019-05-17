@@ -264,9 +264,11 @@ TEXT runtime·gogo(SB), NOSPLIT, $16-8
 	MOVQ	$0, gobuf_ret(BX)
 	MOVQ	$0, gobuf_ctxt(BX)
 	MOVQ	$0, gobuf_bp(BX)
-	MOVQ	gobuf_pc(BX), BX
-	JMP	BX
+	MOVQ	gobuf_pc(BX), BX // 把pc的地址放入BX
+	JMP	BX //执行BX所在的地址的命令, 也就是fn
 
+// 切换到 m->g0 栈, 并调用 fn(g).
+// fn 必须永不返回. 它应该使用 gogo(&g->sched) 来持续运行 g
 // func mcall(fn func(*g))
 // Switch to m->g0's stack, call fn(g).
 // Fn must never return. It should gogo(&g->sched)
@@ -283,6 +285,7 @@ TEXT runtime·mcall(SB), NOSPLIT, $0-8
 	MOVQ	AX, (g_sched+gobuf_g)(AX)
 	MOVQ	BP, (g_sched+gobuf_bp)(AX)
 
+    // 切换到 m->g0 及其栈，调用 fn
 	// switch to m->g0 & its stack, call fn
 	MOVQ	g(CX), BX
 	MOVQ	g_m(BX), BX
@@ -296,7 +299,7 @@ TEXT runtime·mcall(SB), NOSPLIT, $0-8
 	PUSHQ	AX
 	MOVQ	DI, DX
 	MOVQ	0(DI), DI
-	CALL	DI
+	CALL	DI // 开始调用 fn
 	POPQ	AX
 	MOVQ	$runtime·badmcall2(SB), AX
 	JMP	AX
