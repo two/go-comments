@@ -192,18 +192,18 @@ ok:
 	MOVQ	AX, 8(SP)
 	CALL	runtime·args(SB)
 	CALL	runtime·osinit(SB)
-	CALL	runtime·schedinit(SB)
+	CALL	runtime·schedinit(SB) //调度器初始化
 
 	// create a new goroutine to start program
 	MOVQ	$runtime·mainPC(SB), AX		// entry
 	PUSHQ	AX
 	PUSHQ	$0			// arg size
-	CALL	runtime·newproc(SB)
+	CALL	runtime·newproc(SB) // 创建新的 g
 	POPQ	AX
 	POPQ	AX
 
 	// start this M
-	CALL	runtime·mstart(SB)
+	CALL	runtime·mstart(SB) //开始执行
 
 	CALL	runtime·abort(SB)	// mstart should never return
 	RET

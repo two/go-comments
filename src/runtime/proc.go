@@ -4455,15 +4455,21 @@ func checkdead() {
 // This is a variable for testing purposes. It normally doesn't change.
 var forcegcperiod int64 = 2 * 60 * 1e9
 
+// 系统监控在一个独立的 m 上运行
+//
+// 总是在没有 P 的情况下运行，因此不能出现写屏障
 // Always runs without a P, so write barriers are not allowed.
 //
 //go:nowritebarrierrec
 func sysmon() {
 	lock(&sched.lock)
+	// 不计入死锁的系统 m 的数量
 	sched.nmsys++
 	checkdead()
 	unlock(&sched.lock)
 
+	// 如果一个堆 span 在 GC 超过五分钟没有被使用
+	// 则回收交于操作系统
 	// If a heap span goes unused for 5 minutes after a garbage collection,
 	// we hand it back to the operating system.
 	scavengelimit := int64(5 * 60 * 1e9)
@@ -4481,20 +4487,23 @@ func sysmon() {
 	idle := 0 // how many cycles in succession we had not wokeup somebody
 	delay := uint32(0)
 	for {
-		if idle == 0 { // start with 20us sleep...
+		if idle == 0 { // start with 20us sleep... 启动前先休眠 20us
 			delay = 20
-		} else if idle > 50 { // start doubling the sleep after 1ms...
+		} else if idle > 50 { // start doubling the sleep after 1ms... 1ms 后就翻倍休眠时间
 			delay *= 2
 		}
-		if delay > 10*1000 { // up to 10ms
+		if delay > 10*1000 { // up to 10ms 最多增加到 10ms
 			delay = 10 * 1000
 		}
-		usleep(delay)
+		usleep(delay) // 开始休眠
+		// 如果在 STW，则暂时休眠
 		if debug.schedtrace <= 0 && (sched.gcwaiting != 0 || atomic.Load(&sched.npidle) == uint32(gomaxprocs)) {
 			lock(&sched.lock)
 			if atomic.Load(&sched.gcwaiting) != 0 || atomic.Load(&sched.npidle) == uint32(gomaxprocs) {
+				// 标识休眠状态
 				atomic.Store(&sched.sysmonwait, 1)
 				unlock(&sched.lock)
+				// 确保 wake-up 周期足够小从而进行正确的采样
 				// Make wake-up period small enough
 				// for the sampling to be correct.
 				maxsleep := forcegcperiod / 2
@@ -4512,12 +4521,15 @@ func sysmon() {
 				if shouldRelax {
 					osRelax(true)
 				}
+				// 设置休眠超时，在此阻塞
 				notetsleep(&sched.sysmonnote, maxsleep)
 				if shouldRelax {
 					osRelax(false)
 				}
+				// 休眠结束
 				lock(&sched.lock)
 				atomic.Store(&sched.sysmonwait, 0)
+				// 清除休眠超时通知
 				noteclear(&sched.sysmonnote)
 				idle = 0
 				delay = 20
@@ -4528,6 +4540,7 @@ func sysmon() {
 		if *cgo_yield != nil {
 			asmcgocall(*cgo_yield, nil)
 		}
+		// 如果超过 10ms 没有 poll，则 poll 一下网络
 		// poll network if not polled for more than 10ms
 		lastpoll := int64(atomic.Load64(&sched.lastpoll))
 		now := nanotime()
@@ -4547,6 +4560,7 @@ func sysmon() {
 				incidlelocked(1)
 			}
 		}
+		// 抢夺在 syscall 中阻塞的 P、运行时间过长的 G
 		// retake P's blocked in syscalls
 		// and preempt long running G's
 		if retake(now) != 0 {
@@ -4554,6 +4568,7 @@ func sysmon() {
 		} else {
 			idle++
 		}
+
 		// check if we need to force a GC
 		if t := (gcTrigger{kind: gcTriggerTime, now: now}); t.test() && atomic.Load(&forcegc.idle) != 0 {
 			lock(&forcegc.lock)
