@@ -663,6 +663,8 @@ func sigfwdgo(sig uint32, info *siginfo, ctx unsafe.Pointer) bool {
 	return true
 }
 
+// msigsave 将当前线程的信号屏蔽字保存到 mp.sigmask。
+// 当一个非 Go 线程调用 Go 函数时，用于保留非 Go 信号屏蔽字。
 // msigsave saves the current thread's signal mask into mp.sigmask.
 // This is used to preserve the non-Go signal mask when a non-Go
 // thread calls a Go function.
@@ -724,14 +726,22 @@ func minitSignals() {
 // signal stack and then calls a Go function) then set the gsignal
 // stack to the alternate signal stack. Record which choice was made
 // in newSigstack, so that it can be undone in unminit.
+// 如果没有为线程设置备用信号栈（正常情况），则将备用信号栈设置为 gsignal 栈。
+// 如果为线程设置了备用信号栈（非 Go 线程设置备用信号栈然后调用 Go 函数的情况），
+// 则将 gsignal 栈设置为备用信号栈。记录在 newSigstack 中做出的选择，
+// 以便可以在 unminit 中撤消。
 func minitSignalStack() {
 	_g_ := getg()
+	// 获取原有的信号栈
 	var st stackt
 	sigaltstack(nil, &st)
 	if st.ss_flags&_SS_DISABLE != 0 {
+		// 如果禁用了当前的信号栈
+		// 则将 gsignal 的执行栈设置为备用信号栈
 		signalstack(&_g_.m.gsignal.stack)
 		_g_.m.newSigstack = true
 	} else {
+		// 否则将 m 的 gsignal 栈设置为 signalstack 返回的备用信号栈
 		setGsignalStack(&st, &_g_.m.goSigStack)
 		_g_.m.newSigstack = false
 	}
@@ -747,11 +757,15 @@ func minitSignalStack() {
 // After this is called the thread can receive signals.
 func minitSignalMask() {
 	nmask := getg().m.sigmask
+	// 遍历整个信号表
 	for i := range sigtable {
+		// 判断某个信号是否为不可阻止的信号,
+		// 如果是不可阻止的信号, 则删除对应的屏蔽字所在位
 		if !blockableSig(uint32(i)) {
 			sigdelset(&nmask, i)
 		}
 	}
+	// 重置屏蔽字
 	sigprocmask(_SIG_SETMASK, &nmask, nil)
 }
 
@@ -781,6 +795,10 @@ func unminitSignals() {
 // for all running threads to block them and delay their delivery until
 // we start a new thread. When linked into a C program we let the C code
 // decide on the disposition of those signals.
+// 判断某个信号是否为不可阻止的信号
+// 1. 当信号是非阻塞信号，则不可阻止
+// 2. 当改程序为模块时，则可阻止
+// 3. 当信号为 Kill 或 Throw 时，可阻止，否则不可阻止
 func blockableSig(sig uint32) bool {
 	flags := sigtable[sig].flags
 	if flags&_SigUnblock != 0 {
@@ -806,6 +824,9 @@ type gsignalStack struct {
 // It saves the old values in *old for use by restoreGsignalStack.
 // This is used when handling a signal if non-Go code has set the
 // alternate signal stack.
+// setGsignalStack 将当前 m 的 gsignal 栈设置为从 sigaltstack 系统调用返回的备用信号堆栈。
+// 它将旧值保存在 *old 中以供 restoreGsignalStack 使用。
+// 如果非 Go 代码设置了，则在处理信号时使用备用栈。
 //go:nosplit
 //go:nowritebarrierrec
 func setGsignalStack(st *stackt, old *gsignalStack) {
@@ -836,6 +857,7 @@ func restoreGsignalStack(st *gsignalStack) {
 }
 
 // signalstack sets the current thread's alternate signal stack to s.
+// 将 s 设置为备用信号栈，此方法仅在信号栈被禁用时调用
 //go:nosplit
 func signalstack(s *stack) {
 	st := stackt{ss_size: s.hi - s.lo}
