@@ -548,8 +548,8 @@ func schedinit() {
 	typelinksinit() // uses maps, activeModules
 	itabsinit()     // uses activeModules
 
-	msigsave(_g_.m)
-	initSigmask = _g_.m.sigmask
+	msigsave(_g_.m)             // msigsave 将当前线程的信号屏蔽字保存到 mp.sigmask, 其实现与系统相关
+	initSigmask = _g_.m.sigmask // 初始化当前的信号屏蔽字
 
 	goargs()
 	goenvs()

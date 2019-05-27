@@ -344,12 +344,12 @@ func sigaltstack(new, old *stackt)
 func setitimer(mode int32, new, old *itimerval)
 
 //go:noescape
-func rtsigprocmask(how int32, new, old *sigset, size int32)
+func rtsigprocmask(how int32, new, old *sigset, size int32) // 汇编实现
 
 //go:nosplit
 //go:nowritebarrierrec
 func sigprocmask(how int32, new, old *sigset) {
-	rtsigprocmask(how, new, old, int32(unsafe.Sizeof(*new)))
+	rtsigprocmask(how, new, old, int32(unsafe.Sizeof(*new))) // 修改 old, 返回
 }
 
 func raise(sig uint32)
