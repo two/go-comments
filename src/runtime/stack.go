@@ -125,6 +125,10 @@ const (
 	// Stored into g->stackguard0 to cause split stack check failure.
 	// Must be greater than any real sp.
 	// 0xfffffade in hex.
+	// Goroutine 抢占请求
+	// 存储到 g.stackguard0 来导致栈分段检查失败
+	// 必须比任何实际的 SP 都要大
+	// 十六进制为：0xfffffade
 	stackPreempt = uintptrMask & -1314
 
 	// Thread is forking.
@@ -955,6 +959,7 @@ func newstack() {
 	// NOTE: stackguard0 may change underfoot, if another thread
 	// is about to try to preempt gp. Read it just once and use that same
 	// value now and below.
+	// 如果是发起的抢占请求而非真正的栈分段
 	preempt := atomic.Loaduintptr(&gp.stackguard0) == stackPreempt
 
 	// Be conservative about where we preempt.
@@ -969,12 +974,15 @@ func newstack() {
 	// If the GC is in some way dependent on this goroutine (for example,
 	// it needs a lock held by the goroutine), that small preemption turns
 	// into a real deadlock.
+	// 保守的对用户态代码进行抢占，而非抢占运行时代码
+	// 如果正持有锁、分配内存或抢占被禁用，则不发生抢占
 	if preempt {
 		if thisg.m.locks != 0 || thisg.m.mallocing != 0 || thisg.m.preemptoff != "" || thisg.m.p.ptr().status != _Prunning {
 			// Let the goroutine keep running for now.
 			// gp->preempt is set, so it will be preempted next time.
+			// 不发生抢占，继续调度
 			gp.stackguard0 = gp.stack.lo + _StackGuard
-			gogo(&gp.sched) // never return
+			gogo(&gp.sched) // never return 重新进入调度循环
 		}
 	}
 
@@ -997,6 +1005,7 @@ func newstack() {
 		throw("runtime: split stack overflow")
 	}
 
+	// 真正抢占的逻辑
 	if preempt {
 		if gp == thisg.m.g0 {
 			throw("runtime: preempt g0")
@@ -1031,6 +1040,7 @@ func newstack() {
 		}
 
 		// Act like goroutine called runtime.Gosched.
+		// 表现得像是调用了 runtime.Gosched，主动让权
 		casgstatus(gp, _Gwaiting, _Grunning)
 		gopreempt_m(gp) // never return
 	}
