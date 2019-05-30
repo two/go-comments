@@ -17,6 +17,7 @@ const (
 
 // Don't split the stack as this method may be invoked without a valid G, which
 // prevents us from allocating more stack.
+// 是从操作系统上申请清零后的内存，调用参数是 _PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_PRIVATE
 //go:nosplit
 func sysAlloc(n uintptr, sysStat *uint64) unsafe.Pointer {
 	p, err := mmap(nil, n, _PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_PRIVATE, -1, 0)
@@ -154,6 +155,7 @@ func sysFault(v unsafe.Pointer, n uintptr) {
 	mmap(v, n, _PROT_NONE, _MAP_ANON|_MAP_PRIVATE|_MAP_FIXED, -1, 0)
 }
 
+// 是从操作系统中保留内存的地址空间，并未直接分配内存，调用参数是 _PROT_NONE,
 func sysReserve(v unsafe.Pointer, n uintptr) unsafe.Pointer {
 	p, err := mmap(v, n, _PROT_NONE, _MAP_ANON|_MAP_PRIVATE, -1, 0)
 	if err != 0 {
@@ -162,6 +164,7 @@ func sysReserve(v unsafe.Pointer, n uintptr) unsafe.Pointer {
 	return p
 }
 
+// 是用于通知操作系统使用先前已经保留好的空间，参数是 _PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_FIXED|_MAP_PRIVATE。
 func sysMap(v unsafe.Pointer, n uintptr, sysStat *uint64) {
 	mSysStatInc(sysStat, n)
 

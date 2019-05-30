@@ -15,17 +15,20 @@ package runtime
 import "runtime/internal/atomic"
 
 // Central list of free objects of a given size.
-//
+// 搜集了给定大小等级的所有 span
+// 当 mcache 中 span 的数量不够使用时，会向 mcentral 的 nonempty 列表中获得新的 span
 //go:notinheap
 type mcentral struct {
 	lock      mutex
 	spanclass spanClass
-	nonempty  mSpanList // list of spans with a free object, ie a nonempty free list
-	empty     mSpanList // list of spans with no free objects (or cached in an mcache)
+	nonempty  mSpanList // list of spans with a free object, ie a nonempty free list 带有自由对象的 span 列表，即非空闲列表
+	empty     mSpanList // list of spans with no free objects (or cached in an mcache) 没有自由对象的 span 列表（或缓存在 mcache 中）
 
 	// nmalloc is the cumulative count of objects allocated from
 	// this mcentral, assuming all spans in mcaches are
 	// fully-allocated. Written atomically, read under STW.
+	// 假设 mcaches 中的所有 span 都已完全分配，则 nmalloc 是
+	// 从此 mcentral 分配的对象的累积计数。原子地写，在 STW 下读。
 	nmalloc uint64
 }
 
@@ -103,7 +106,7 @@ retry:
 	unlock(&c.lock)
 
 	// Replenish central list if empty.
-	s = c.grow()
+	s = c.grow() // 从 mcentral 中 mspan 不够用，向 mhead 获取
 	if s == nil {
 		return nil
 	}
@@ -253,7 +256,7 @@ func (c *mcentral) grow() *mspan {
 	size := uintptr(class_to_size[c.spanclass.sizeclass()])
 	n := (npages << _PageShift) / size
 
-	s := mheap_.alloc(npages, c.spanclass, false, true)
+	s := mheap_.alloc(npages, c.spanclass, false, true) // 从 mcentral 中 mspan 不够用，向 mhead 获取
 	if s == nil {
 		return nil
 	}
