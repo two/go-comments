@@ -4154,6 +4154,7 @@ func procresize(nprocs int32) *p {
 			pp.wbBuf.reset()
 			atomicstorep(unsafe.Pointer(&allp[i]), unsafe.Pointer(pp)) // 相当于 allp[i] = pp
 		}
+		// 为 P 分配 cache 对象
 		if pp.mcache == nil {
 			if old == 0 && i == 0 {
 				if getg().m.mcache == nil {
@@ -4161,6 +4162,7 @@ func procresize(nprocs int32) *p {
 				}
 				pp.mcache = getg().m.mcache // bootstrap
 			} else {
+				// 创建 cache
 				pp.mcache = allocmcache()
 			}
 		}
@@ -4175,6 +4177,7 @@ func procresize(nprocs int32) *p {
 	}
 
 	// free unused P's
+	// 释放未使用的 P
 	for i := nprocs; i < old; i++ {
 		p := allp[i]
 		if trace.enabled && p == getg().m.p.ptr() {
@@ -4223,6 +4226,7 @@ func procresize(nprocs int32) *p {
 			}
 			p.deferpool[i] = p.deferpoolbuf[i][:0]
 		}
+		// 释放当前 P 绑定的 cache
 		freemcache(p.mcache)
 		p.mcache = nil
 		gfpurge(p)

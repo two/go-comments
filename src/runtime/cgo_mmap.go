@@ -20,6 +20,7 @@ var _cgo_mmap unsafe.Pointer
 //go:linkname _cgo_munmap _cgo_munmap
 var _cgo_munmap unsafe.Pointer
 
+// 可以让进程的虚拟地址空间切分出一块指定大小的虚拟地址空间，mmap 映射返回的地址也是从逻辑上被消耗的，需要通过 unmap 进行回收
 func mmap(addr unsafe.Pointer, n uintptr, prot, flags, fd int32, off uint32) (unsafe.Pointer, int) {
 	if _cgo_mmap != nil {
 		// Make ret a uintptr so that writing to it in the

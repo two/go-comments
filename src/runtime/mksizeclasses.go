@@ -81,7 +81,7 @@ const (
 	pageShift    = 13
 
 	// Derived constants.
-	pageSize = 1 << pageShift
+	pageSize = 1 << pageShift // 2^13/1024 = 8 kb
 )
 
 type class struct {
@@ -125,7 +125,7 @@ func makeClasses() []class {
 		for allocsize%size > allocsize/8 {
 			allocsize += pageSize
 		}
-		npages := allocsize / pageSize
+		npages := allocsize / pageSize // 能够分成的页数
 
 		// If the previous sizeclass chose the same
 		// allocation size and fit the same number of
