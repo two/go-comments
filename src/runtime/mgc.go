@@ -165,6 +165,7 @@ const defaultHeapMinimum = 4 << 20
 // Initialized from $GOGC.  GOGC=off means no GC.
 var gcpercent int32
 
+// 垃圾回收器初始化
 func gcinit() {
 	if unsafe.Sizeof(workbuf{}) != _WorkbufSize {
 		throw("size of Workbuf is suboptimal")
@@ -174,15 +175,21 @@ func gcinit() {
 	mheap_.sweepdone = 1
 
 	// Set a reasonable initial GC trigger.
+	// 设置合理的初始 GC 触发比率
 	memstats.triggerRatio = 7 / 8.0
 
 	// Fake a heap_marked value so it looks like a trigger at
 	// heapminimum is the appropriate growth from heap_marked.
 	// This will go into computing the initial GC goal.
+	// 伪造一个 heap_marked 值，使它看起来像一个触发器
+	// heapminimum 是 heap_marked的 适当增长。
+	// 这将用于计算初始 GC 目标。
+	memstats.heap_marked = uin
 	memstats.heap_marked = uint64(float64(heapminimum) / (1 + memstats.triggerRatio))
 
 	// Set gcpercent from the environment. This will also compute
 	// and set the GC trigger and goal.
+	// 从环境中设置 gcpercent。这也将计算并设置 GC 触发器和目标。
 	_ = setGCPercent(readgogc())
 
 	work.startSema = 1
@@ -203,11 +210,13 @@ func readgogc() int32 {
 // gcenable is called after the bulk of the runtime initialization,
 // just before we're about to start letting user code run.
 // It kicks off the background sweeper goroutine and enables GC.
+// 在我们即将开始让用户代码运行之前，在大量运行时初始化之后调用 gcenable。
+// 它启动后台的 sweeper goroutine 并启用 GC。
 func gcenable() {
 	c := make(chan int, 1)
 	go bgsweep(c)
 	<-c
-	memstats.enablegc = true // now that runtime is initialized, GC is okay
+	memstats.enablegc = true // now that runtime is initialized, GC is okay  现在运行时已经初始化完毕了，GC 已就绪
 }
 
 //go:linkname setGCPercent runtime/debug.setGCPercent
@@ -220,11 +229,13 @@ func setGCPercent(in int32) (out int32) {
 	gcpercent = in
 	heapminimum = defaultHeapMinimum * uint64(gcpercent) / 100
 	// Update pacing in response to gcpercent change.
+	// 更新步调来响应 gcpercent 变化
 	gcSetTriggerRatio(memstats.triggerRatio)
 	unlock(&mheap_.lock)
 
 	// If we just disabled GC, wait for any concurrent GC mark to
 	// finish so we always return with no GC running.
+	// 如果我们刚好禁用了 GC，则等待任何并发 GC 标记完成，从而我们总是能够在没有 GC 的情况下返回
 	if in < 0 {
 		gcWaitOnMark(atomic.Load(&work.cycles))
 	}

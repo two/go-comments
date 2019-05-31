@@ -360,6 +360,9 @@ func markrootSpans(gcw *gcWork, shard int) {
 // gp must be the calling user gorountine.
 //
 // This must be called with preemption enabled.
+// 垃圾回收标记阶段
+// 用户go来调用
+// 只会在发生抢占的时候才会调用
 func gcAssistAlloc(gp *g) {
 	// Don't assist in non-preemptible contexts. These are
 	// generally fragile and won't allow the assist to block.
@@ -428,7 +431,7 @@ retry:
 	completed := gp.param != nil
 	gp.param = nil
 	if completed {
-		gcMarkDone()
+		gcMarkDone() // 标记完成
 	}
 
 	if gp.gcAssistBytes < 0 {
@@ -439,7 +442,7 @@ retry:
 		//
 		// If this is because we were preempted, reschedule
 		// and try some more.
-		if gp.preempt {
+		if gp.preempt { // 抢占状态
 			Gosched()
 			goto retry
 		}
